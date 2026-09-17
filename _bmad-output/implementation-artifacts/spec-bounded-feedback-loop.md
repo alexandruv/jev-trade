@@ -12,6 +12,7 @@ review_loop_iteration: 0
 context: []
 baseline_commit: '4a394b6'
 github_issue: 'https://github.com/alexandruv/jev-trade/issues/1'
+github_project: 'https://github.com/users/alexandruv/projects/3'
 ---
 
 <frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">
