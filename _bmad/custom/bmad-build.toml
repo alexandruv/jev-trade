@@ -1,0 +1,11 @@
+[workflow]
+
+activation_steps_append = [
+  """
+Mandatory GitHub issue approval gate for every build, including oneshot and full routes:
+
+After Step 2 creates the scope/spec and before setting its status to ready-for-dev or entering Step 3, verify that the current repository has GitHub Issues enabled. Create one issue for the scoped work with a title and body that link the spec and summarize its acceptance criteria. Record the issue URL or number in the spec frontmatter as `github_issue` without changing the frozen intent. If the repository has no GitHub remote, `gh` is unavailable, or issue creation fails, HALT and report the exact blocker.
+
+Then HALT and ask the human to add the exact `approved` label to that issue. Do not infer approval from chat, issue text, comments, assignment, or any other label. Before development begins, verify the label with `gh issue view <issue> --json labels` and proceed only when `approved` is present. If it is absent, remain blocked. This gate is mandatory for every build and must be rechecked after any scope/spec revision.
+"""
+]
