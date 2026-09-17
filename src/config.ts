@@ -38,6 +38,9 @@ export const config = {
   jevDecisionTtlMs: bounded("JEV_DECISION_TTL_MS", 5000, 1),
   jevDecisionMinConfidence: bounded("JEV_DECISION_MIN_CONFIDENCE", 0.45, 0, 1),
   jevUsdPerMTok: 0.042,
+  feedbackWindowBlocks: Math.floor(bounded("FEEDBACK_WINDOW_BLOCKS", 10, 1)),
+  feedbackHistoryWindows: Math.floor(bounded("FEEDBACK_HISTORY_WINDOWS", 10, 1)),
+  feedbackTimeoutMs: bounded("FEEDBACK_TIMEOUT_MS", 5000, 1),
   port: Number(env("PORT", "3000")),
   historySize: 1000,
 };

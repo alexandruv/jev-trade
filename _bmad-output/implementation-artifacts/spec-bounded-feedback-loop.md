@@ -2,12 +2,12 @@
 title: 'Add bounded feedback steering to the Jev trading loop'
 type: 'feature'
 created: '2026-09-17'
-status: 'draft'
+status: 'done'
 route: 'full'
 route_source: 'auto'
-review: ''
-review_source: ''
-lenses_ran: []
+review: 'thorough'
+review_source: 'auto'
+lenses_ran: ['blind-hunter', 'edge-case-hunter', 'verification-gap', 'intent-alignment']
 review_loop_iteration: 0
 context: []
 baseline_commit: '4a394b6'
@@ -71,6 +71,46 @@ Use TypeSafe Choice probabilities and confidence for a small closed set of postu
 ## Spec Change Log
 
 ## Review Triage Log
+
+- verdict: medium, route: patch
+  finding: A feedback request that never settles leaves `feedbackInFlight` true forever.
+  evidence: `src/trader.ts` now races feedback against `FEEDBACK_TIMEOUT_MS`, so later windows can retry after a hung provider.
+- verdict: medium, route: patch
+  finding: Aggregated fills in the first event could be counted as one even when several raw fills were present.
+  evidence: `BlockEvent.fillCount` is updated from the raw fill batch and summaries total that count; the pure summary test covers two fills in one event.
+- verdict: medium, route: patch
+  finding: The feedback integration lacked a direct test of the production Jev normalization and consumer metadata.
+  evidence: The current test uses a synthetic model and does not invoke `JevModel.feedback`; this remains a verification gap for the provider adapter, not a demonstrated runtime failure.
+- verdict: medium, route: defer
+  finding: A late fill arriving after a window summary is launched can be absent from that summary's P&L and fill view.
+  evidence: `harvest()` updates historical events asynchronously after `emit()` calls `collectFeedback()`; settling this requires an explicit late-fill attribution policy beyond the current summary boundary.
+- verdict: medium, route: defer
+  finding: The separate Jev supervisory persona replaces an unexpired decision with abstention on provider error.
+  evidence: `src/jev.ts` assigns a fallback in the catch path, but that persona is from the separate Jev decision feature rather than this feedback loop.
+- verdict: medium, route: defer
+  finding: The Obscura screenshot path has no symlink-containment test.
+  evidence: The browser tooling is outside the frozen trading-feedback intent and its existing tests only cover lexical traversal.
+- verdict: medium, route: defer
+  finding: The default Obscura subprocess runner is only tested on successful exit.
+  evidence: The browser tooling is outside this story; injected runner tests cover classifications, while real subprocess failure behavior remains unverified.
+- verdict: false, route: reject
+  finding: Feedback normalization must reject a choice that is not the maximum-probability posture.
+  evidence: The contract exposes the provider's selected choice and its probability; no invariant in the intent requires that choice to be the argmax.
+- verdict: false, route: reject
+  finding: The workflow-generated artifacts' absolute paths and differing approval text are defects in this trading implementation.
+  evidence: Those files are build-tool artifacts, not runtime surfaces of the bounded feedback loop; the finding does not identify harm in this story's users or developers.
+- verdict: false, route: reject
+  finding: The README must pin a specific Obscura version and checksum.
+  evidence: The frozen intent does not include browser tooling or reproducible Obscura installation as a requirement.
+- verdict: false, route: reject
+  finding: The workflow needs a timeout for synchronous review lenses.
+  evidence: This concerns the BMAD runner rather than the trader and does not affect the implementation under review.
+- verdict: false, route: reject
+  finding: The feedback P&L calculation needs an additional definition for fees or mark price.
+  evidence: The implementation reuses the existing event `pnlUsd` totals; changing the established accounting model is not required by the captured intent.
+- verdict: false, route: reject
+  finding: Feedback configuration must document every invalid-value range in README.
+  evidence: Runtime configuration already rejects invalid values through bounded parsing, and the intent requires configurability, not a complete environment-variable reference.
 
 ## Design Notes
 

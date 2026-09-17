@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { config } from "./config";
 import { Market, type Book, type Fill, type Quote, type QuoteResult, type Side } from "./market";
-import type { Action, Decision, Model, TradeState } from "./model";
+import type { Action, Decision, FeedbackContext, FeedbackRequest, FeedbackSummary, Model, TradeState } from "./model";
 import type { JevDecisionPersona } from "./jev";
 import { TradeFeed, type MakerFill, type TradePrint } from "./trades";
 
@@ -17,6 +17,8 @@ export interface BlockEvent {
   quote: Quote | null;
   /** Maker fills that landed in this block (aggregated), attached when the trade logs for it arrive. */
   fill: Fill | null;
+  /** Number of raw maker fills represented by the aggregate. */
+  fillCount: number;
   /** Our size known to be resting on the book after this block's order. */
   resting: { bidMon: number; askMon: number };
   position: { side: "long" | "short" | "flat"; size: number; entryPrice: number | null; unrealizedUsd: number; unrealizedMon: number };
@@ -67,6 +69,10 @@ export class Trader {
   private simId = 0;
   private position = { mon: 0, costUsd: 0 }; // signed inventory and its cost basis
   private totals: Totals = { blocks: 0, decisions: 0, quotes: 0, fills: 0, reverted: 0, lateBlocks: 0, jevUsd: 0, gasMon: 0, gasUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlMon: 0, pnlPct: 0 };
+  private feedbackWindow: BlockEvent[] = [];
+  private feedbackHistory: FeedbackSummary[] = [];
+  private feedbackContext: FeedbackContext | null = null;
+  private feedbackInFlight = false;
 
   constructor(
     private market: Market,
@@ -76,6 +82,7 @@ export class Trader {
     private onQuote: (block: number, quote: Quote) => void = () => {},
     private jevPersona: JevDecisionPersona | null = null,
     private onJevDecision: (result: string) => void = () => {},
+    private onFeedback: (result: string, summary?: FeedbackSummary) => void = () => {},
   ) {
     mkdirSync("data", { recursive: true });
   }
@@ -172,7 +179,10 @@ export class Trader {
     for (const [block, fs] of byBlock) {
       const fill = aggregate(fs);
       const e = this.history.find((h) => h.block === block);
-      if (e) e.fill = fill;
+      if (e) {
+        e.fill = fill;
+        e.fillCount += fs.length;
+      }
       this.onFill(block, fill);
     }
   }
@@ -248,6 +258,7 @@ export class Trader {
       trades: this.trades ? this.trades.summary(H, block) : empty,
       recentTrades: (this.trades?.recent(10) ?? []).map((t) => `${t.block} ${t.side} ${round(t.size, 1)} @ ${t.price.toFixed(6)}`),
       allowed: { buy: this.allowed("buy", book), sell: this.allowed("sell", book) },
+      feedback: this.feedbackContext,
       supervisory: this.jevPersona?.current(Date.now(), { buy: this.allowed("buy", book), sell: this.allowed("sell", book) }) ? (() => { const d = this.jevPersona!.current(Date.now(), { buy: this.allowed("buy", book), sell: this.allowed("sell", book) })!; return { posture: d.posture, confidence: d.confidence, expiresAt: d.expiresAt }; })() : null,
     };
   }
@@ -289,6 +300,7 @@ export class Trader {
         : decision && { action: decision.action, probabilities: decision.probabilities, upIn10: decision.upIn10, latencyMs: Math.round(decision.latencyMs), late: false },
       quote,
       fill: null,
+      fillCount: 0,
       resting: { bidMon: round(this.restingMon("buy"), 1), askMon: round(this.restingMon("sell"), 1) },
       position: {
         side: this.position.mon > 0 ? "long" : this.position.mon < 0 ? "short" : "flat",
@@ -300,6 +312,34 @@ export class Trader {
     if (this.history.length > config.historySize) this.history.shift();
     appendFileSync("data/events.jsonl", JSON.stringify(event) + "\n");
     this.onEvent(event, timing);
+    this.collectFeedback(event);
+  }
+
+  private collectFeedback(event: BlockEvent) {
+    this.feedbackWindow.push(event);
+    if (this.feedbackWindow.length < config.feedbackWindowBlocks) return;
+    const summary = summarizeFeedback(this.feedbackWindow, this.feedbackContext?.posture ?? "abstain");
+    this.feedbackWindow = [];
+    this.feedbackHistory.push(summary);
+    if (this.feedbackHistory.length > config.feedbackHistoryWindows) this.feedbackHistory.shift();
+    if (this.feedbackInFlight) {
+      this.onFeedback(`feedback window ${summary.startBlock}-${summary.endBlock} retained; prior evaluation still in flight`, summary);
+      return;
+    }
+    const request: FeedbackRequest = { summary, history: this.feedbackHistory.slice(-config.feedbackHistoryWindows), current: this.feedbackContext };
+    this.feedbackInFlight = true;
+    this.onFeedback(`feedback window ${summary.startBlock}-${summary.endBlock} evaluating`, summary);
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`feedback timed out after ${config.feedbackTimeoutMs}ms`)), config.feedbackTimeoutMs);
+    });
+    void Promise.race([this.model.feedback(request), timeout]).then((context) => {
+      this.feedbackContext = context;
+      this.onFeedback(`feedback ${context.posture} confidence=${context.confidence.toFixed(2)}`, summary);
+    }).catch((error: unknown) => {
+      this.onFeedback(`feedback failed (${error instanceof Error ? error.message : "unknown error"}); retaining ${this.feedbackContext?.posture ?? "abstain"}`, summary);
+    }).finally(() => {
+      this.feedbackInFlight = false;
+    });
   }
 }
 
@@ -315,3 +355,32 @@ function aggregate(fills: Fill[]): Fill {
 }
 
 const round = (x: number, d: number) => Math.round(x * 10 ** d) / 10 ** d;
+
+export function summarizeFeedback(events: BlockEvent[], priorPosture: FeedbackSummary["priorPosture"] = "abstain"): FeedbackSummary {
+  if (!events.length) throw new Error("cannot summarize an empty feedback window");
+  const first = events[0]!, last = events[events.length - 1]!;
+  const actionMix: FeedbackSummary["actionMix"] = { buy: 0, sell: 0, hold: 0 };
+  let latency = 0, decisions = 0;
+  for (const event of events) {
+    if (!event.decision) continue;
+    actionMix[event.decision.action]++;
+    if (!event.decision.late) { latency += event.decision.latencyMs; decisions++; }
+  }
+  const signedPosition = (event: BlockEvent) => event.position.size * (event.position.side === "short" ? -1 : event.position.side === "long" ? 1 : 0);
+  return {
+    startBlock: first.block,
+    endBlock: last.block,
+    blocks: events.length,
+    decisions,
+    lateBlocks: events.filter((event) => event.decision?.late).length,
+    fills: events.reduce((count, event) => count + (event.fillCount ?? (event.fill ? 1 : 0)), 0),
+    actionMix,
+    avgLatencyMs: decisions ? round(latency / decisions, 2) : 0,
+    startPnlUsd: round(first.totals.pnlUsd, 6),
+    endPnlUsd: round(last.totals.pnlUsd, 6),
+    pnlDeltaUsd: round(last.totals.pnlUsd - first.totals.pnlUsd, 6),
+    startPositionMon: signedPosition(first),
+    endPositionMon: signedPosition(last),
+    priorPosture,
+  };
+}

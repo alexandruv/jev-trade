@@ -40,6 +40,8 @@ With no `PRIVATE_KEY` it dry-runs: real book, real decisions, simulated fills. S
 
 When `MODEL=jev`, the dedicated Jev decision persona also evaluates a bounded trading posture every `JEV_DECISION_WINDOW_BLOCKS` blocks (default 10, about 3 seconds). This supervisory call is asynchronous and cannot bypass position caps, margin checks, order mechanics, or dry-run/live rules. Its typed Choice distribution is validated for confidence, expiry, and abstention before being placed in the next model state. Configure `JEV_DECISION_TTL_MS` and `JEV_DECISION_MIN_CONFIDENCE` as needed. `JEV_MODEL_ID` is a provider alias; do not depend on a TypeSafe model's underlying name.
 
+Every model also receives a bounded execution-feedback summary after `FEEDBACK_WINDOW_BLOCKS` completed block events (default 10). The summary includes action mix, fills, decision latency, position, and observed P&L change; the latest `FEEDBACK_HISTORY_WINDOWS` summaries (default 10) are retained. Feedback is asynchronous, allows only one request in flight, and times out after `FEEDBACK_TIMEOUT_MS` (default 5000 ms). It is contextual guidance only: it never changes position caps, margin checks, order size, quote mechanics, or dry-run/live behavior. Failed or overlapping requests retain the last guidance. Feedback does not prove profitability and is not an RLVR or policy-search system.
+
 ## Endpoints
 
 Deployed (dry run, mock model): https://jev-trader-production.up.railway.app
@@ -83,7 +85,7 @@ Live sends are fired and forgotten, so the `block` event carries the **intent**:
     src/market.ts   Kuru: read book, hand-encoded batchUpdate (cancel + post-only place), margin deposits, local nonce, async confirmation
     src/model.ts    Model interface, JevModel (AI SDK experimental_evaluate), MockModel
     src/jev.ts      TypeSafe Jev decision persona, typed envelope, validation, bounded in-flight guard
-    src/trader.ts   the loop: one in flight, hold when late, position and P&L accounting, Jev supervision
+    src/trader.ts   the loop: one in flight, hold when late, position and P&L accounting, Jev supervision and bounded feedback
     src/server.ts   Bun.serve: snapshot, history, SSE
 
 ## The 300 ms budget

@@ -5,6 +5,39 @@ import type { JevDecisionProvider, RawJevDecision } from "./jev";
 
 /** Models answer buy or sell. `hold` only appears on late blocks (no decision was made). */
 export type Action = "buy" | "sell" | "hold";
+export type FeedbackPosture = "buy" | "sell" | "hold" | "reduce" | "abstain";
+
+export interface FeedbackSummary {
+  startBlock: number;
+  endBlock: number;
+  blocks: number;
+  decisions: number;
+  lateBlocks: number;
+  fills: number;
+  actionMix: Record<Action, number>;
+  avgLatencyMs: number;
+  startPnlUsd: number;
+  endPnlUsd: number;
+  pnlDeltaUsd: number;
+  startPositionMon: number;
+  endPositionMon: number;
+  priorPosture: FeedbackPosture;
+}
+
+export interface FeedbackContext {
+  posture: FeedbackPosture;
+  probabilities: Record<FeedbackPosture, number>;
+  confidence: number;
+  guidance: string;
+  windowEndBlock: number;
+  source: "jev" | "mock" | "fallback";
+}
+
+export interface FeedbackRequest {
+  summary: FeedbackSummary;
+  history: FeedbackSummary[];
+  current: FeedbackContext | null;
+}
 
 /** What the model sees. Compact, relative, human-readable. */
 export interface TradeState {
@@ -26,6 +59,7 @@ export interface TradeState {
   recentTrades: string[]; // newest last, "block side size @ price"
   allowed: { buy: boolean; sell: boolean };
   supervisory?: { posture: string; confidence: number; expiresAt: number } | null;
+  feedback?: FeedbackContext | null;
 }
 
 export interface Decision {
@@ -39,6 +73,7 @@ export interface Decision {
 export interface Model {
   readonly name: string;
   decide(state: TradeState): Promise<Decision>;
+  feedback(request: FeedbackRequest): Promise<FeedbackContext>;
 }
 
 const QUESTIONS = {
@@ -77,10 +112,33 @@ export class JevModel implements Model {
     };
   }
 
+  async feedback(request: FeedbackRequest): Promise<FeedbackContext> {
+    const r = await experimental_evaluate({
+      model: this.model,
+      state: request as any,
+      questions: {
+        posture: {
+          type: "choice",
+          instructions: "Choose one bounded posture for the next trading window using the observed execution summary. This is contextual guidance only and never changes risk limits or execution rules.",
+          criteria: {
+            buy: "Prefer buy exposure when the observed evidence supports upward movement after costs.",
+            sell: "Prefer sell exposure when the observed evidence supports downward movement after costs.",
+            hold: "Keep the current posture when the evidence does not justify changing direction.",
+            reduce: "Reduce exposure when losses, latency, or execution conditions make new exposure less attractive.",
+            abstain: "Do not recommend a posture when the window is ambiguous or too sparse.",
+          },
+        },
+      },
+      maxRetries: 0,
+    });
+    const answer = r.answers.posture as { choice?: unknown; probabilities?: unknown };
+    return normalizeFeedback(answer, request.summary.endBlock, "jev");
+  }
+
   async advise(state: TradeState): Promise<RawJevDecision> {
     const r = await experimental_evaluate({
       model: this.model,
-      state: { ...state, supervisory: undefined },
+      state: { ...state, supervisory: undefined } as any,
       questions: {
         posture: {
           type: "choice",
@@ -130,11 +188,40 @@ export class MockModel implements Model {
     };
   }
 
+  async feedback(request: FeedbackRequest): Promise<FeedbackContext> {
+    const { summary } = request;
+    let posture: FeedbackPosture = request.current?.posture ?? "abstain";
+    if (summary.pnlDeltaUsd < 0 || summary.lateBlocks > 0) posture = "reduce";
+    else if (summary.actionMix.buy > summary.actionMix.sell) posture = "buy";
+    else if (summary.actionMix.sell > summary.actionMix.buy) posture = "sell";
+    const probabilities = feedbackProbabilities(posture);
+    return { posture, probabilities, confidence: probabilities[posture], guidance: "Deterministic mock feedback from the completed window; contextual only.", windowEndBlock: summary.endBlock, source: "mock" };
+  }
+
   private noise(block: number) {
     let h = block * 2654435761 >>> 0;
     h ^= h >>> 15; h = (h * 2246822519) >>> 0; h ^= h >>> 13;
     return ((h % 1000) / 1000 - 0.5) * 3;
   }
+}
+
+const FEEDBACK_POSTURES: FeedbackPosture[] = ["buy", "sell", "hold", "reduce", "abstain"];
+
+function feedbackProbabilities(choice: FeedbackPosture): Record<FeedbackPosture, number> {
+  return Object.fromEntries(FEEDBACK_POSTURES.map((posture) => [posture, posture === choice ? 0.7 : 0.3 / (FEEDBACK_POSTURES.length - 1)])) as Record<FeedbackPosture, number>;
+}
+
+export function normalizeFeedback(answer: unknown, endBlock: number, source: "jev" | "mock" | "fallback"): FeedbackContext {
+  if (!answer || typeof answer !== "object") throw new Error("feedback posture answer is missing");
+  const value = answer as { choice?: unknown; probabilities?: unknown };
+  if (!FEEDBACK_POSTURES.includes(value.choice as FeedbackPosture) || !value.probabilities || typeof value.probabilities !== "object") throw new Error("feedback posture answer is malformed");
+  const raw = value.probabilities as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !FEEDBACK_POSTURES.includes(key as FeedbackPosture))) throw new Error("feedback posture has an unknown probability key");
+  const probabilities = Object.fromEntries(FEEDBACK_POSTURES.map((posture) => [posture, raw[posture] ?? 0])) as Record<FeedbackPosture, number>;
+  const values = Object.values(probabilities);
+  if (values.some((probability) => !Number.isFinite(probability) || probability < 0 || probability > 1) || Math.abs(values.reduce((sum, probability) => sum + probability, 0) - 1) > 0.02) throw new Error("feedback posture probabilities are invalid");
+  const posture = value.choice as FeedbackPosture;
+  return { posture, probabilities, confidence: probabilities[posture], guidance: "TypeSafe Choice distribution; contextual guidance, not a correctness or profitability guarantee.", windowEndBlock: endBlock, source };
 }
 
 export const createModel = (): Model => (config.model === "jev" ? new JevModel() : new MockModel());

@@ -40,8 +40,9 @@ const trader = new Trader(
   },
   jevPersona,
   (result) => console.log(`jev-decision ${result}`),
+  (result, summary) => console.log(`feedback ${result}${summary ? ` · blocks ${summary.startBlock}-${summary.endBlock} pnl Δ$${summary.pnlDeltaUsd}` : ""}`),
 );
 trader.attachTradeFeed(log10(market.params.sizePrecision));
 
-console.log(`jev-trader · model=${model.name} · post-only ${config.quoteInsideTicks} tick inside the touch · horizon ${config.horizonBlocks} blocks · ${config.dryRun ? "DRY RUN" : `wallet ${market.address}`} · market ${config.market} · read ${config.readRpcUrl} · :${config.port}`);
+console.log(`jev-trader · model=${model.name} · post-only ${config.quoteInsideTicks} tick inside the touch · horizon ${config.horizonBlocks} blocks · feedback ${config.feedbackWindowBlocks} blocks/${config.feedbackHistoryWindows} retained · ${config.dryRun ? "DRY RUN" : `wallet ${market.address}`} · market ${config.market} · read ${config.readRpcUrl} · :${config.port}`);
 startBlockFeed((block) => trader.onBlock(block));
