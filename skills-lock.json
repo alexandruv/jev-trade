@@ -175,6 +175,12 @@
       "skillPath": "skills/bmad-walkthrough/SKILL.md",
       "computedHash": "ba7487a01ffb34263d33b0df10240aacd339593c21b565e88ffbaf9dd1fec607"
     },
+    "obscura": {
+      "source": "h4ckf0r0day/obscura",
+      "sourceType": "github",
+      "skillPath": "skills/obscura/SKILL.md",
+      "computedHash": "0d077043c296b2b0ca12bee8e758926b798f6c124371539dee2f0c5347466fe1"
+    },
     "typesafe-ai": {
       "source": "typesafe-ai/skills",
       "sourceType": "github",

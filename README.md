@@ -8,6 +8,34 @@ One decision every Monad block. A TypeSafe Jev model watches the Kuru MON-USDC o
     bun install
     bun run start
 
+## Browser smoke check
+
+Install a pinned Obscura release from the upstream
+[release instructions](https://github.com/h4ckf0r0day/obscura/releases) separately;
+application startup never downloads or launches it. Verify the installed
+binary before running checks:
+
+    OBSCURA_BIN=/path/to/obscura; "$OBSCURA_BIN" --version
+
+With the web
+dashboard running on localhost, run:
+
+    OBSCURA_BIN=obscura BROWSER_URL=http://127.0.0.1:3000 bun run browser:check
+
+The command explicitly enables private-network access, waits for the page to
+settle, requests text output, and fails with a distinct message for a missing
+binary, navigation failure, timeout, or empty page. Configure `OBSCURA_BIN`,
+`BROWSER_URL`, `BROWSER_OUTPUT_DIR`, `BROWSER_WAIT`, and `BROWSER_TIMEOUT`.
+Set `BROWSER_SCREENSHOT=dashboard.png` to write a PNG below the configured
+output directory (the default `.obscura-artifacts/` is ignored by git):
+
+    BROWSER_SCREENSHOT=dashboard.png BROWSER_URL=http://127.0.0.1:3000 bun run browser:check
+
+Use Obscura for browser navigation, DOM/text extraction, screenshots, visual
+checks, and supported CDP automation. Keep backend/API/RPC, trading, risk,
+execution, and deterministic frontend build checks on their existing tools.
+Stealth is opt-in and is not part of this smoke command.
+
 With no `PRIVATE_KEY` it dry-runs: real book, real decisions, simulated fills. Set `MODEL=jev` and `TYPESAFE_AI_API_KEY` to use Jev; the default `mock` is a momentum heuristic stand-in.
 
 When `MODEL=jev`, the dedicated Jev decision persona also evaluates a bounded trading posture every `JEV_DECISION_WINDOW_BLOCKS` blocks (default 10, about 3 seconds). This supervisory call is asynchronous and cannot bypass position caps, margin checks, order mechanics, or dry-run/live rules. Its typed Choice distribution is validated for confidence, expiry, and abstention before being placed in the next model state. Configure `JEV_DECISION_TTL_MS` and `JEV_DECISION_MIN_CONFIDENCE` as needed. `JEV_MODEL_ID` is a provider alias; do not depend on a TypeSafe model's underlying name.

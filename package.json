@@ -18,6 +18,7 @@
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "dev": "bun --watch run src/index.ts"
+    "dev": "bun --watch run src/index.ts",
+    "browser:check": "bun run scripts/obscura-check.ts"
   }
 }
