@@ -1,7 +1,8 @@
 import { config } from "./config";
 import { startBlockFeed } from "./chain";
 import { Market } from "./market";
-import { createModel } from "./model";
+import { asJevDecisionProvider, createModel, JevModel } from "./model";
+import { JevDecisionPersona } from "./jev";
 import { Trader } from "./trader";
 import { log10 } from "./book";
 import { startServer } from "./server";
@@ -9,6 +10,9 @@ import { startServer } from "./server";
 const market = new Market();
 await market.init();
 const model = createModel();
+const jevPersona = model instanceof JevModel
+  ? new JevDecisionPersona(asJevDecisionProvider(model), { minConfidence: config.jevDecisionMinConfidence, ttlMs: config.jevDecisionTtlMs })
+  : null;
 
 const server = startServer(
   { model: model.name, wallet: market.address, dryRun: config.dryRun, market: config.market, startedAt: Date.now() },
@@ -34,6 +38,8 @@ const trader = new Trader(
     server.broadcastQuote(block, quote);
     if (quote.status !== "placed") console.log(`#${block} ${quote.status.toUpperCase()} ${quote.side} @ ${quote.price.toFixed(6)} gas ${quote.gasMon.toFixed(6)} MON ${quote.txHash}`);
   },
+  jevPersona,
+  (result) => console.log(`jev-decision ${result}`),
 );
 trader.attachTradeFeed(log10(market.params.sizePrecision));
 

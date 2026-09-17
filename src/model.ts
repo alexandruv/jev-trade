@@ -1,6 +1,7 @@
 import { experimental_evaluate } from "ai";
 import { typeSafeAi } from "@ai-sdk/typesafe-ai";
 import { config } from "./config";
+import type { JevDecisionProvider, RawJevDecision } from "./jev";
 
 /** Models answer buy or sell. `hold` only appears on late blocks (no decision was made). */
 export type Action = "buy" | "sell" | "hold";
@@ -24,6 +25,7 @@ export interface TradeState {
   trades: { count: number; buyMon: number; sellMon: number; cvdMon: number; vwap: number | null; lastPrice: number | null; lastSide: "buy" | "sell" | null };
   recentTrades: string[]; // newest last, "block side size @ price"
   allowed: { buy: boolean; sell: boolean };
+  supervisory?: { posture: string; confidence: number; expiresAt: number } | null;
 }
 
 export interface Decision {
@@ -46,7 +48,7 @@ const QUESTIONS = {
       question: "Will MON be higher or lower than the current mid after `horizonBlocks` more blocks?",
       goal: "Trade MON-USDC on Kuru. Blocks are ~300ms; `horizonBlocks` (~30 s) is the horizon. A decision is made every few blocks and held until the next one. The trade crosses the spread (`spreadBps`), so the move must beat that cost.",
       timing: "The order executes as an immediate-or-cancel market order in the next block.",
-      inputs: "Taker flow is the strongest signal: `trades.cvdMon` (taker buys minus taker sells over the horizon), `trades.lastSide` and `recentTrades` show who is hitting the book. `depth` and `book` show resting liquidity per side at several distances from mid; thin depth on one side means price moves easily that way. `returnsBps` and `recentMids` show the path over the horizon. If `allowed.buy` is false the trade will be a sell regardless, and vice versa.",
+      inputs: "Taker flow is the strongest signal: `trades.cvdMon` (taker buys minus taker sells over the horizon), `trades.lastSide` and `recentTrades` show who is hitting the book. `depth` and `book` show resting liquidity per side at several distances from mid; thin depth on one side means price moves easily that way. `returnsBps` and `recentMids` show the path over the horizon. If `allowed.buy` is false the trade will be a sell regardless, and vice versa. If `supervisory` is present, treat it as bounded Jev guidance for the current window; it never overrides these allowed-side and execution constraints.",
     },
     criteria: {
       buy: "Buy MON now: mid more likely to be higher after `horizonBlocks` blocks, by more than the spread.",
@@ -74,7 +76,38 @@ export class JevModel implements Model {
       inputTokens: r.usage?.inputTokens ?? 0,
     };
   }
+
+  async advise(state: TradeState): Promise<RawJevDecision> {
+    const r = await experimental_evaluate({
+      model: this.model,
+      state: { ...state, supervisory: undefined },
+      questions: {
+        posture: {
+          type: "choice",
+          instructions: "Choose the next bounded trading posture for the next decision window. Abstain when the evidence is insufficient.",
+          criteria: {
+            buy: "Prefer buy exposure when evidence supports upward movement after execution costs.",
+            sell: "Prefer sell exposure when evidence supports downward movement after execution costs.",
+            hold: "Keep the current posture when changing would not be justified.",
+            reduce: "Reduce exposure because current conditions make risk more important than new exposure.",
+            abstain: "Do not recommend a posture because evidence is ambiguous, stale, or unsafe.",
+          },
+        },
+      },
+      maxRetries: 0,
+    });
+    return toRawJevDecision(r.answers.posture);
+  }
 }
+
+export function toRawJevDecision(answer: unknown): RawJevDecision {
+  if (!answer || typeof answer !== "object") throw new Error("TypeSafe posture answer is missing");
+  const value = answer as { choice?: unknown; probabilities?: unknown };
+  if (typeof value.choice !== "string" || !value.probabilities || typeof value.probabilities !== "object") throw new Error("TypeSafe posture answer is malformed");
+  return { choice: value.choice as RawJevDecision["choice"], probabilities: value.probabilities as RawJevDecision["probabilities"] };
+}
+
+export const asJevDecisionProvider = (model: JevModel): JevDecisionProvider => ({ advise: (state) => model.advise(state) });
 
 /** Deterministic stand-in: momentum + imbalance + mean reversion toward flat. */
 export class MockModel implements Model {

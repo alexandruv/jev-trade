@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { config } from "./config";
 import { Market, type Book, type Fill, type Quote, type QuoteResult, type Side } from "./market";
 import type { Action, Decision, Model, TradeState } from "./model";
+import type { JevDecisionPersona } from "./jev";
 import { TradeFeed, type MakerFill, type TradePrint } from "./trades";
 
 export interface BlockEvent {
@@ -73,6 +74,8 @@ export class Trader {
     private onEvent: (e: BlockEvent, timing?: Timing) => void,
     private onFill: (block: number, fill: Fill) => void = () => {},
     private onQuote: (block: number, quote: Quote) => void = () => {},
+    private jevPersona: JevDecisionPersona | null = null,
+    private onJevDecision: (result: string) => void = () => {},
   ) {
     mkdirSync("data", { recursive: true });
   }
@@ -101,7 +104,13 @@ export class Trader {
       if (this.mids.length > 400) this.mids.shift();
       this.trades?.poll(block).then(() => this.harvest()); // off the hot path: eth_getLogs for prints (and our fills) since the last poll
 
-      const decision = await this.model.decide(this.buildState(block, book));
+      const state = this.buildState(block, book);
+      const decision = await this.model.decide(state);
+      if (this.jevPersona && this.totals.blocks % config.jevDecisionWindowBlocks === 0) {
+        void this.jevPersona.consult(state).then((result) => {
+          this.onJevDecision(result.accepted ? `accepted ${result.decision.posture} confidence=${result.decision.confidence.toFixed(2)}` : `fallback ${result.reason}`);
+        });
+      }
       const wanted: Side = decision.action === "sell" ? "sell" : "buy";
       const other: Side = wanted === "buy" ? "sell" : "buy";
       // The position cap (and, live, margin funds) can only pick the reducing side. The probabilities still show the model's call.
@@ -239,6 +248,7 @@ export class Trader {
       trades: this.trades ? this.trades.summary(H, block) : empty,
       recentTrades: (this.trades?.recent(10) ?? []).map((t) => `${t.block} ${t.side} ${round(t.size, 1)} @ ${t.price.toFixed(6)}`),
       allowed: { buy: this.allowed("buy", book), sell: this.allowed("sell", book) },
+      supervisory: this.jevPersona?.current(Date.now(), { buy: this.allowed("buy", book), sell: this.allowed("sell", book) }) ? (() => { const d = this.jevPersona!.current(Date.now(), { buy: this.allowed("buy", book), sell: this.allowed("sell", book) })!; return { posture: d.posture, confidence: d.confidence, expiresAt: d.expiresAt }; })() : null,
     };
   }
 

@@ -10,6 +10,8 @@ One decision every Monad block. A TypeSafe Jev model watches the Kuru MON-USDC o
 
 With no `PRIVATE_KEY` it dry-runs: real book, real decisions, simulated fills. Set `MODEL=jev` and `TYPESAFE_AI_API_KEY` to use Jev; the default `mock` is a momentum heuristic stand-in.
 
+When `MODEL=jev`, the dedicated Jev decision persona also evaluates a bounded trading posture every `JEV_DECISION_WINDOW_BLOCKS` blocks (default 10, about 3 seconds). This supervisory call is asynchronous and cannot bypass position caps, margin checks, order mechanics, or dry-run/live rules. Its typed Choice distribution is validated for confidence, expiry, and abstention before being placed in the next model state. Configure `JEV_DECISION_TTL_MS` and `JEV_DECISION_MIN_CONFIDENCE` as needed. `JEV_MODEL_ID` is a provider alias; do not depend on a TypeSafe model's underlying name.
+
 ## Endpoints
 
 Deployed (dry run, mock model): https://jev-trader-production.up.railway.app
@@ -52,7 +54,8 @@ Live sends are fired and forgotten, so the `block` event carries the **intent**:
     src/book.ts     one-eth_call order book reader (decodes getL2Book, merges the AMM vault)
     src/market.ts   Kuru: read book, hand-encoded batchUpdate (cancel + post-only place), margin deposits, local nonce, async confirmation
     src/model.ts    Model interface, JevModel (AI SDK experimental_evaluate), MockModel
-    src/trader.ts   the loop: one in flight, hold when late, position and P&L accounting
+    src/jev.ts      TypeSafe Jev decision persona, typed envelope, validation, bounded in-flight guard
+    src/trader.ts   the loop: one in flight, hold when late, position and P&L accounting, Jev supervision
     src/server.ts   Bun.serve: snapshot, history, SSE
 
 ## The 300 ms budget

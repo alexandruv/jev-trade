@@ -1,5 +1,9 @@
 const env = (key: string, fallback?: string) => process.env[key] ?? fallback;
 const num = (key: string) => (env(key) ? Number(env(key)) : undefined);
+const bounded = (key: string, fallback: number, min: number, max = Number.POSITIVE_INFINITY) => {
+  const value = Number(env(key));
+  return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
+};
 
 export const config = {
   rpcUrl: env("RPC_URL", "https://rpc.monad.xyz")!, // sends, receipts, nonce, gas estimation
@@ -30,6 +34,9 @@ export const config = {
   horizonBlocks: Number(env("HORIZON_BLOCKS", "100")), // the model is asked about the move over this many blocks (~30 s)
   model: env("MODEL", "mock") as "mock" | "jev",
   jevModelId: env("JEV_MODEL_ID", "jev-latest")!,
+  jevDecisionWindowBlocks: Math.floor(bounded("JEV_DECISION_WINDOW_BLOCKS", 10, 1)),
+  jevDecisionTtlMs: bounded("JEV_DECISION_TTL_MS", 5000, 1),
+  jevDecisionMinConfidence: bounded("JEV_DECISION_MIN_CONFIDENCE", 0.45, 0, 1),
   jevUsdPerMTok: 0.042,
   port: Number(env("PORT", "3000")),
   historySize: 1000,
